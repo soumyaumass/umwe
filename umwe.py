@@ -1,5 +1,6 @@
 import os
 import io
+import time
 import numpy as np
 import torch
 import torch.optim as optim
@@ -9,10 +10,11 @@ from torch.nn.parameter import Parameter
 from torch.utils.data import DataLoader
 from dictionary import Dictionary
 from discriminator import Discriminator
+from evaluation import Evaluator
 
 class UMWE(nn.Module):
     
-    def __init__(self, dtype=torch.float32, device=torch.device('cpu')):
+    def __init__(self, dtype=torch.float32, device=torch.device('cpu'), batch=128):
         super(UMWE, self).__init__()
         self.dtype = dtype
         self.device = device
@@ -20,41 +22,57 @@ class UMWE(nn.Module):
         self.tgt_lang = 'en'
         self.langs = ['en', 'es', 'fa']
         self.dim = 300
+        self.batch = batch
+        self.embs = None
+        self.vocabs = None
+        self.encdec  = None
+        self.discriminators = None
         
     def load_embeddings(self, lang, emb_path):
-        word2id = {}
-        vectors = np.zeros((1,300))
-        dico = []
-        embeddings = []
         
-        with io.open(emb_path, 'r', encoding='utf-8', newline='\n', errors='ignore') as f:
-            for i, line in enumerate(f):
-                if i > 0:
-                    word, vect = line.rstrip().split(' ', 1)
-                    vect = np.fromstring(vect, sep=' ')
-                    
-                    if not np.any(vect):
-                        vect[0] = 0.01
-                    
-                    if word in word2id:
-                        print("word found twice")
-                    else:
-                        if vect.shape[0] != self.dim:
-                            print("Dimension not 300")
-                    
-                    word2id[word] = len(word2id)
-                    vectors = np.vstack((vectors, vect))
-                if i == 3000:
-                    break
-                   
-        id2word = {v:k for k,v in word2id.items()}
-        dico = Dictionary(id2word, word2id, lang)
-        embeddings = vectors[1:,]
-        embeddings = torch.tensor(embeddings, dtype=self.dtype)
+        if emb_path.endswith('.pth'):
+            data = torch.load(emb_path)
+            dico = data['dico']
+            embeddings = data['vectors']
         
-        print("Embeddings Loaded")
-        return dico, embeddings
+            return dico, embeddings
+        else:
+            word2id = {}
+            dico = []
+            embeddings = []
+            vectors = []
+            with io.open(emb_path, 'r', encoding='utf-8', newline='\n', errors='ignore') as f:
+                for i, line in enumerate(f):
+                    if i > 0:
+                        word, vect = line.rstrip().split(' ', 1)
+                        vect = np.fromstring(vect, sep=' ')
+        
+                        if not np.any(vect):
+                            vect[0] = 0.01
+                        
+                        if word in word2id:
+                            print("word found twice")
+                        else:
+                            if vect.shape[0] != self.dim:
+                                print("Dimension not 300")
                     
+                        word2id[word] = len(word2id)
+                        vectors.append(vect[None])
+                        if i == 200000:
+                            break    
+            
+            id2word = {v:k for k,v in word2id.items()}
+            dico = Dictionary(id2word, word2id, lang)
+            embeddings = np.concatenate(vectors, 0)
+            embeddings = torch.tensor(embeddings, dtype=self.dtype)
+            
+            print(f"Text Embeddings Loaded for language = {lang}")
+            return dico, embeddings
+    
+    def export_embeddings(self, lang, export_embs, filetype):
+        
+        if filetype == "pth":
+            torch.save({'dico': self.vocabs[lang], 'vectors': export_embs[lang]}, 'wiki.{}.pth'.format(lang))
     
     def build_model(self):
         
@@ -63,11 +81,16 @@ class UMWE(nn.Module):
         embs = {}
         vocabs = {}
         EMB_DIR = './'
+        pth_or_vec = "pth"
+        if os.path.exists("wiki.en.pth") == False:
+            pth_or_vec = "vec"
+            print("Pretrained Pytorch embedding files not found")
+            
         for lang in self.langs:
-            src_embs.append(os.path.join(EMB_DIR, f'wiki.{lang}.vec'))
+            src_embs.append(os.path.join(EMB_DIR, f'wiki.{lang}.{pth_or_vec}'))
             
         for i in range(len(self.src_langs)):
-            dico, emb = self.load_embeddings(self.src_langs[i], src_embs[i])
+            dico, emb = self.load_embeddings(self.src_langs[i], src_embs[i+1])
             vocabs[self.src_langs[i]] = dico
             _src_embs[self.src_langs[i]] = emb
             
@@ -82,7 +105,6 @@ class UMWE(nn.Module):
         tgt_emb.weight.data.copy_(emb)
         embs[self.tgt_lang] = tgt_emb.to(self.device)
         
-        
         encdec = {lang : nn.Linear(self.dim, self.dim).to(self.device) for lang in self.langs}
         
         for p in encdec[self.tgt_lang].parameters():
@@ -93,49 +115,117 @@ class UMWE(nn.Module):
         
         disc = {lang: Discriminator(lang).to(self.device) for lang in self.langs}
         
-        print('done')        
-        return embs, encdec, disc
-    
-    def fit(self, embs, encdec, discriminators):
-        batch = 128
-        freq = 1024
-        criterion = nn.BCELoss()
-        optimizer = {lang: optim.Adam(discriminators[lang].parameters(), lr=0.001) for lang in self.langs}
-        prev_loss = 1.
-        for epoch in range(5000):
-            for disc in discriminators.values():
-                disc.train()
+        self.embs = embs
+        self.encdec = encdec
+        self.discriminators = disc
+        self.vocabs = vocabs
+                 
+        for lang in self.langs:
+            export_embs = _src_embs.copy()
+            export_embs[self.tgt_lang] = emb
+            self.export_embeddings(lang, export_embs, "pth")
         
-            loss = 0.
-            if prev_loss - loss < 1e-3:
-                print(epoch)
-                break
-            for dec_lang in self.langs:
+        
+    def discrim_step(self, freq):
+        for disc in self.discriminators.values():
+            disc.train()
+            
+        discrim_loss = 0.
+        criterion = nn.BCELoss()
+        discrim_optimizer = {lang: optim.Adam(self.discriminators[lang].parameters(), lr=0.001) for lang in self.langs}
+        
+        for dec_lang in self.langs:
+            
+            enc_lang = np.random.choice(self.langs)
+            src_id = torch.LongTensor(self.batch).random_(freq).to(self.device)
+            tgt_id = torch.LongTensor(self.batch).random_(freq).to(self.device)
+            
+            with torch.set_grad_enabled(False):
+                src_emb = self.embs[enc_lang](src_id).detach()
+                tgt_emb = self.embs[dec_lang](tgt_id).detach()
+                src_emb = self.encdec[enc_lang](src_emb)
+                src_emb = F.linear(src_emb, self.encdec[dec_lang].weight.t())
+            
+            x_to_disc = torch.cat([src_emb, tgt_emb], 0)
+            y_true = torch.FloatTensor(2 * self.batch).zero_()
+            
+            y_true[:self.batch] = 1
+            y_true = y_true.to(self.device)
+            
+            preds = self.discriminators[dec_lang](x_to_disc).flatten()
+            discrim_loss += criterion(preds, y_true)
+            
+        discrim_optimizer[dec_lang].zero_grad()
+        discrim_loss.backward(retain_graph=True)
+        discrim_optimizer[dec_lang].step()
+        
+        return discrim_loss.data.item()
+        
+        
+    def mapping_step(self, freq):
+        for disc in self.discriminators.values():
+            disc.eval()
+            
+        mapping_loss = 0
+        criterion = nn.BCELoss()
+        mapping_optimizer = {lang: optim.Adam(self.discriminators[lang].parameters(), lr=0.001) for lang in self.langs}
+        
+        for dec_lang in self.langs:
+            
+            enc_lang = np.random.choice(self.langs)
+            src_id = torch.LongTensor(self.batch).random_(freq).to(self.device)
+            tgt_id = torch.LongTensor(self.batch).random_(freq).to(self.device)
+            
+            with torch.set_grad_enabled(False):
+                src_emb = self.embs[enc_lang](src_id).detach()
+                tgt_emb = self.embs[dec_lang](tgt_id).detach()
+                src_emb = self.encdec[enc_lang](src_emb)
+                src_emb = F.linear(src_emb, self.encdec[dec_lang].weight.t())
+            
+            x_to_disc = torch.cat([src_emb, tgt_emb], 0)
+            y_true = torch.FloatTensor(2 * self.batch).zero_()
+            
+            y_true[:self.batch] = 1
+            y_true = y_true.to(self.device)
+            preds = self.discriminators[dec_lang](x_to_disc)
+            mapping_loss += criterion(preds, 1 - y_true)
+            
+            
+        mapping_optimizer[dec_lang].zero_grad()
+        mapping_loss.backward(retain_graph=True)
+        mapping_optimizer[dec_lang].step()
+        
+        beta = 0.001
+        for mapping in self.encdec.values():
+            W = mapping.weight.detach()
+            W.copy_((1 + beta) * W - beta * W.mm(W.transpose(0, 1).mm(W)))
+    
+    def discrim_fit(self):
+        freq = 10000
+        eval_ = Evaluator(self)
+        for epoch in range(5):    
+            discrim_loss_list = []
+            
+            start = time.time()
+            for n_iter in range(0,1000000, self.batch):
                 
-                enc_lang = np.random.choice(self.langs)
-                src_id = torch.LongTensor(batch).random_(freq).to(self.device)
-                tgt_id = torch.LongTensor(batch).random_(freq).to(self.device)
+                for n in range(5):
+                    discrim_loss_list.append(self.discrim_step(freq))
                 
-                with torch.set_grad_enabled(False):
-                    src_emb = embs[enc_lang](src_id).detach()
-                    tgt_emb = embs[dec_lang](tgt_id).detach()
-                    src_emb = encdec[enc_lang](src_emb)
-                    src_emb = F.linear(src_emb, encdec[dec_lang].weight.t())
+                discrim_loss = np.array(discrim_loss_list)
                 
-                x_to_disc = torch.cat([src_emb, tgt_emb], 0)
-                y_true = torch.FloatTensor(2 * batch).zero_()
+                if n_iter % 500 == 0:
+                    
+                    print(f'n_iter = {n_iter}',end=' ')
+                    print("Discriminator Loss = ", end=' ')
+                    print(f'{np.mean(discrim_loss):.4f}', end=' ')
+                    end = time.time()
+                    print(f'Time = {end-start}')
+                    start = end
                 
-                y_true[:batch] = 1
-                y_true = y_true.to(self.device)
-                
-                preds = discriminators[dec_lang](x_to_disc).flatten()
-                loss += criterion(preds, y_true)
-                
-                optimizer[dec_lang].zero_grad()
-                loss.backward(retain_graph=True)
-                optimizer[dec_lang].step()
-            print(loss)
-            prev_loss = loss
+                self.mapping_step(freq)
+            print(eval_.clws('es', 'en'))
+            
             
 def main():
     
@@ -148,10 +238,9 @@ def main():
     print('using device:', device)
     dtype = torch.float32
     
-    model = UMWE(dtype, device)
-    embs, ed, d = model.build_model()
-    model.fit(embs, ed, d)
-
+    model = UMWE(dtype, device, 128)
+    model.build_model()
+    model.discrim_fit()
 
 if __name__ == '__main__':
     main()
