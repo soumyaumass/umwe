@@ -127,12 +127,13 @@ class UMWE(nn.Module):
         
         
     def discrim_step(self, freq):
+        
         for disc in self.discriminators.values():
             disc.train()
             
         discrim_loss = 0.
         criterion = nn.BCELoss()
-        discrim_optimizer = {lang: optim.Adam(self.discriminators[lang].parameters(), lr=0.001) for lang in self.langs}
+        discrim_optimizer = {lang: optim.SGD(self.discriminators[lang].parameters(), lr=0.01) for lang in self.langs}
         
         for dec_lang in self.langs:
             
@@ -163,12 +164,13 @@ class UMWE(nn.Module):
         
         
     def mapping_step(self, freq):
+        
         for disc in self.discriminators.values():
             disc.eval()
             
         mapping_loss = 0
         criterion = nn.BCELoss()
-        mapping_optimizer = {lang: optim.Adam(self.discriminators[lang].parameters(), lr=0.001) for lang in self.langs}
+        mapping_optimizer = {lang: optim.SGD(self.discriminators[lang].parameters(), lr=0.01) for lang in self.langs}
         
         for dec_lang in self.langs:
             
@@ -187,7 +189,7 @@ class UMWE(nn.Module):
             
             y_true[:self.batch] = 1
             y_true = y_true.to(self.device)
-            preds = self.discriminators[dec_lang](x_to_disc)
+            preds = self.discriminators[dec_lang](x_to_disc).flatten()
             mapping_loss += criterion(preds, 1 - y_true)
             
             
@@ -202,35 +204,35 @@ class UMWE(nn.Module):
     
     def discrim_fit(self):
         freq = 10000
-        eval_ = Evaluator(self)
-        for epoch in range(5):    
+        
+        for epoch in range(2):    
             discrim_loss_list = []
             
             start = time.time()
-            for n_iter in range(0,1000000, self.batch):
+            for n_iter in range(0,200000, self.batch):
                 
                 for n in range(5):
                     discrim_loss_list.append(self.discrim_step(freq))
                 
                 discrim_loss = np.array(discrim_loss_list)
                 
-                if n_iter % 500 == 0:
-                    
+                if n_iter % 500 == 0:  
                     print(f'n_iter = {n_iter}',end=' ')
                     print("Discriminator Loss = ", end=' ')
                     print(f'{np.mean(discrim_loss):.4f}', end=' ')
                     end = time.time()
-                    print(f'Time = {end-start}')
+                    print(f'Time = {(end-start):.2f}')
                     start = end
+                    discrim_loss_list = []
                 
                 self.mapping_step(freq)
-            print(eval_.clws('es', 'en'))
             
             
 def main():
     
     USE_GPU = True
     if USE_GPU and torch.cuda.is_available():
+        torch.cuda.empty_cache()
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
@@ -241,6 +243,8 @@ def main():
     model = UMWE(dtype, device, 128)
     model.build_model()
     model.discrim_fit()
+    eval_ = Evaluator(model)
+    print(eval_.clws('es', 'en'))
 
 if __name__ == '__main__':
     main()
