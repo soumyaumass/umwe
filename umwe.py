@@ -30,6 +30,8 @@ class UMWE(nn.Module):
         self.max_rank = 15000
         self.lexica_method = 'nn'
         self.lexica = {}
+        self.discrim_optimizer = None
+        self.mapping_optimizer = None
         self.mpsr_optimizer = None
         
     def load_embeddings(self, lang, emb_path):
@@ -125,6 +127,8 @@ class UMWE(nn.Module):
             export_embs[self.tgt_lang] = emb
             self.export_embeddings(lang, export_embs, "pth")
         
+        self.discrim_optimizer = {lang: optim.SGD(self.discriminators[lang].parameters(), lr=0.1) for lang in self.langs}
+        self.mapping_optimizer = {lang: optim.SGD(self.encdec[lang].parameters(), lr=0.1) for lang in self.langs}
         self.mpsr_optimizer = {lang: optim.Adam(self.encdec[lang].parameters()) for lang in self.langs}
         
     def discrim_step(self, freq):
@@ -134,7 +138,6 @@ class UMWE(nn.Module):
             
         discrim_loss = 0.
         criterion = nn.BCELoss()
-        discrim_optimizer = {lang: optim.SGD(self.discriminators[lang].parameters(), lr=0.1) for lang in self.langs}
         
         for dec_lang in self.langs:
             enc_lang = np.random.choice(self.langs)
@@ -157,9 +160,9 @@ class UMWE(nn.Module):
             # Calculate discriminator loss - assign 0 to fake and 1 to real embeddings
             discrim_loss += criterion(preds, y_true)
             
-        discrim_optimizer[dec_lang].zero_grad()
+        self.discrim_optimizer[dec_lang].zero_grad()
         discrim_loss.backward(retain_graph=True)
-        discrim_optimizer[dec_lang].step()
+        self.discrim_optimizer[dec_lang].step()
         
         return discrim_loss.data.item()
          
@@ -170,7 +173,6 @@ class UMWE(nn.Module):
             
         mapping_loss = 0
         criterion = nn.BCELoss()
-        mapping_optimizer = {lang: optim.SGD(self.encdec[lang].parameters(), lr=0.1) for lang in self.langs}
         
         # Loop over all languages
         for dec_lang in self.langs:
@@ -201,14 +203,16 @@ class UMWE(nn.Module):
             mapping_loss += criterion(preds, 1 - y_true)
             
             
-        mapping_optimizer[dec_lang].zero_grad()
+        self.mapping_optimizer[dec_lang].zero_grad()
         mapping_loss.backward(retain_graph=True)
-        mapping_optimizer[dec_lang].step()
+        self.mapping_optimizer[dec_lang].step()
         
         beta = 0.001
         for mapping in self.encdec.values():
             W = mapping.weight.detach()
             W.copy_((1 + beta) * W - beta * W.mm(W.transpose(0, 1).mm(W)))
+        
+        return mapping_loss.data.item()
     
     def discrim_fit(self):
         freq = 10000
@@ -221,17 +225,19 @@ class UMWE(nn.Module):
                 for n in range(5):
                     discrim_loss_list.append(self.discrim_step(freq))
                 discrim_loss = np.array(discrim_loss_list)
+                map_loss = self.mapping_step(freq)
                 
                 if n_iter % 500 == 0:  
                     print(f'n_iter = {n_iter}',end=' ')
                     print("Discriminator Loss = ", end=' ')
                     print(f'{np.mean(discrim_loss):.4f}', end=' ')
+                    print("Mappings Loss = ", end=' ')
+                    print(f'{map_loss:.4f}', end=' ')
                     end = time.time()
                     print(f'Time = {(end-start):.2f}')
                     start = end
                     discrim_loss_list = []
                 
-                self.mapping_step(freq)
     
     def mpsr_dictionary(self):
         for i, lang1 in enumerate(self.langs):
@@ -338,8 +344,8 @@ def main():
     
     model = UMWE(dtype, device, 128)
     model.build_model()
+    model.discrim_fit()
     model.mpsr_refine()
-    # model.discrim_fit()
     # eval_ = Evaluator(model)
     # print(eval_.clws('es', 'en'))
 

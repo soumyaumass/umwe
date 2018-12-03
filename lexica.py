@@ -43,8 +43,6 @@ def get_candidates(params, emb1, emb2):
 
         all_scores = torch.cat(all_scores, 0)
         all_targets = torch.cat(all_targets, 0)
-        print(all_scores.shape)
-        print(all_targets.shape)
 
     # contextual dissimilarity measure
     elif params.lexica_method.startswith('csls_knn_'):
@@ -79,7 +77,6 @@ def get_candidates(params, emb1, emb2):
         torch.arange(0, all_targets.size(0)).long().unsqueeze(1),
         all_targets[:, 0].unsqueeze(1)
     ], 1)
-    print(all_pairs.shape)
 
     # sanity check
     assert all_scores.size() == all_pairs.size() == (params.max_rank, 2)
