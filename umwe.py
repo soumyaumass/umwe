@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from dictionary import Dictionary
 from discriminator import Discriminator
 from evaluation import Evaluator
+from lexica import build_lexicon
 
 class UMWE(nn.Module):
     def __init__(self, dtype=torch.float32, device=torch.device('cpu'), batch=128):
@@ -26,6 +27,10 @@ class UMWE(nn.Module):
         self.vocabs = None
         self.encdec  = None
         self.discriminators = None
+        self.max_rank = 15000
+        self.lexica_method = 'nn'
+        self.lexica = {}
+        self.mpsr_optimizer = None
         
     def load_embeddings(self, lang, emb_path):
         if emb_path.endswith('.pth'):
@@ -120,6 +125,8 @@ class UMWE(nn.Module):
             export_embs[self.tgt_lang] = emb
             self.export_embeddings(lang, export_embs, "pth")
         
+        self.mpsr_optimizer = {lang: optim.Adam(self.encdec[lang].parameters()) for lang in self.langs}
+        
     def discrim_step(self, freq):
         
         for disc in self.discriminators.values():
@@ -127,7 +134,7 @@ class UMWE(nn.Module):
             
         discrim_loss = 0.
         criterion = nn.BCELoss()
-        discrim_optimizer = {lang: optim.SGD(self.discriminators[lang].parameters(), lr=0.01) for lang in self.langs}
+        discrim_optimizer = {lang: optim.SGD(self.discriminators[lang].parameters(), lr=0.1) for lang in self.langs}
         
         for dec_lang in self.langs:
             enc_lang = np.random.choice(self.langs)
@@ -163,7 +170,7 @@ class UMWE(nn.Module):
             
         mapping_loss = 0
         criterion = nn.BCELoss()
-        mapping_optimizer = {lang: optim.SGD(self.encdec[lang].parameters(), lr=0.01) for lang in self.langs}
+        mapping_optimizer = {lang: optim.SGD(self.encdec[lang].parameters(), lr=0.1) for lang in self.langs}
         
         # Loop over all languages
         for dec_lang in self.langs:
@@ -225,6 +232,97 @@ class UMWE(nn.Module):
                     discrim_loss_list = []
                 
                 self.mapping_step(freq)
+    
+    def mpsr_dictionary(self):
+        for i, lang1 in enumerate(self.langs):
+            for j, lang2 in enumerate(self.langs):
+                # If the pair occurs for the first time, create the lexicon
+                if i < j:
+                    # Get embeddings for lang1
+                    src_emb = self.embs[lang1].weight
+                    # Apply lang1 encoder to embeddings
+                    src_emb = self.encdec[lang1](src_emb).detach()
+                    # Get embeddings for lang2
+                    tgt_emb = self.embs[lang2].weight
+                    # Apply lang2 encoder to embeddings
+                    tgt_emb = self.encdec[lang2](tgt_emb).detach()
+                    # Normalize output embeddings
+                    src_emb = src_emb / src_emb.norm(2, 1, keepdim=True).expand_as(src_emb)
+                    tgt_emb = tgt_emb / tgt_emb.norm(2, 1, keepdim=True).expand_as(tgt_emb)
+                    # Build lexicon Lex(lang1, lang2)
+                    self.lexica[(lang1, lang2)] = build_lexicon(self, src_emb, tgt_emb)
+                # If the pair has already occurred before, swap the entries in the lexicon
+                elif i > j:
+                    self.lexica[(lang1, lang2)] = self.lexica[(lang2, lang1)][:, [1,0]]
+                # If lang1 == lang2, each word is the nearest neighbor of itself
+                else:
+                    idx = torch.arange(self.max_rank).long().view(self.max_rank, 1)
+                    self.lexica[(lang1, lang2)] = torch.cat([idx, idx], dim=1).to(self.device)
+    
+    def mpsr_step(self):
+        mpsr_loss = 0
+        # Loop on all languages
+        for lang1 in self.langs:
+            # Randomly select a language
+            lang2 = np.random.choice(self.langs)
+
+            ### Sample word IDs from both lang1 and lang2
+            # Get the lexicon corresponding to both langs
+            lexicon = self.lexica[(lang1, lang2)]
+            # Generate random indices for sampling pairs from lexicon
+            idx = torch.LongTensor(self.batch).random_(len(lexicon)).to(self.device)
+            # Sample the lexicon with the generated indices
+            sample_ids = lexicon.index_select(0, idx)
+            # Get lang1 IDs
+            lang1_ids = sample_ids[:, 0].to(self.device)
+            # Get lang2 IDs
+            lang2_ids = sample_ids[:, 1].to(self.device)
+            ###
+
+            ### Get corresponding word embeddings
+            with torch.set_grad_enabled(True):
+                lang1_emb = self.embs[lang1](lang1_ids).detach()
+                lang2_emb = self.embs[lang2](lang2_ids).detach()
+                # Encode to target space
+                lang1_emb = self.encdec[lang1](lang1_emb)
+                # Decode to target language space
+                lang1_emb = F.linear(lang1_emb, self.encdec[lang2].weight.t())
+            ###
+
+            mpsr_loss += F.mse_loss(lang1_emb, lang2_emb)
+        
+        self.mpsr_optimizer[lang2].zero_grad()
+        mpsr_loss.backward(retain_graph=True)
+        self.mpsr_optimizer[lang2].step()
+
+        beta = 0.001
+        for mapping in self.encdec.values():
+            W = mapping.weight.detach()
+            W.copy_((1 + beta) * W - beta * W.mm(W.transpose(0, 1).mm(W)))
+        
+        return mpsr_loss.data.item()
+    
+    def mpsr_refine(self):
+        for epoch in range(5):
+            # Create lexica from embeddings aligned using MAT in the previous step
+            self.mpsr_dictionary()
+
+            # Optimize MPSR
+            start = time.time()
+            mpsr_loss_list = []
+            for n_iter in range(30000):
+                # MPSR train step
+                mpsr_loss_list.append(self.mpsr_step())
+                # Log loss and other stats
+                if n_iter % 500 == 0:
+                    print(f'n_iter = {n_iter}',end=' ')
+                    print("MPSR Loss = ", end=' ')
+                    print(f'{np.mean(mpsr_loss_list):.4f}', end=' ')
+                    end = time.time()
+                    print(f'Time = {(end-start):.2f}')
+                    start = end
+                    mpsr_loss_list = []
+
             
             
 def main():
@@ -240,9 +338,10 @@ def main():
     
     model = UMWE(dtype, device, 128)
     model.build_model()
-    model.discrim_fit()
-    eval_ = Evaluator(model)
-    print(eval_.clws('es', 'en'))
+    model.mpsr_refine()
+    # model.discrim_fit()
+    # eval_ = Evaluator(model)
+    # print(eval_.clws('es', 'en'))
 
 if __name__ == '__main__':
     main()
