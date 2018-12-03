@@ -163,7 +163,7 @@ class UMWE(nn.Module):
             
         mapping_loss = 0
         criterion = nn.BCELoss()
-        mapping_optimizer = {lang: optim.SGD(self.discriminators[lang].parameters(), lr=0.01) for lang in self.langs}
+        mapping_optimizer = {lang: optim.SGD(self.encdec[lang].parameters(), lr=0.01) for lang in self.langs}
         
         # Loop over all languages
         for dec_lang in self.langs:
