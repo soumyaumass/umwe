@@ -199,7 +199,7 @@ class UMWE(nn.Module):
             # Classify real embeddings as 1, keep others 0
             y_true[:self.batch] = 1
             y_true = y_true.to(self.device)
-            preds = self.discriminators[dec_lang](x_to_disc).flatten()
+            preds = self.discriminators[enc_lang](x_to_disc).flatten()
             mapping_loss += criterion(preds, 1 - y_true)
             
             
@@ -215,22 +215,24 @@ class UMWE(nn.Module):
         return mapping_loss.data.item()
     
     def discrim_fit(self):
-        freq = 10000
+        freq = 75000
         
-        for epoch in range(2):    
+        for epoch in range(1):    
             discrim_loss_list = []
             start = time.time()
             for n_iter in range(0,200000, self.batch):
                 
-                for n in range(5):
-                    discrim_loss_list.append(self.discrim_step(freq))
-                discrim_loss = np.array(discrim_loss_list)
+                # for n in range(5):
+                #     discrim_loss_list.append(self.discrim_step(freq))
+                # discrim_loss = np.array(discrim_loss_list)
+                discrim_loss = self.discrim_step(freq)
                 map_loss = self.mapping_step(freq)
                 
                 if n_iter % 500 == 0:  
                     print(f'n_iter = {n_iter}',end=' ')
                     print("Discriminator Loss = ", end=' ')
-                    print(f'{np.mean(discrim_loss):.4f}', end=' ')
+                    # print(f'{np.mean(discrim_loss):.4f}', end=' ')
+                    print(f'{discrim_loss:.4f}', end=' ')
                     print("Mappings Loss = ", end=' ')
                     print(f'{map_loss:.4f}', end=' ')
                     end = time.time()
@@ -309,7 +311,7 @@ class UMWE(nn.Module):
         return mpsr_loss.data.item()
     
     def mpsr_refine(self):
-        for epoch in range(5):
+        for epoch in range(1):
             # Create lexica from embeddings aligned using MAT in the previous step
             self.mpsr_dictionary()
 
@@ -346,8 +348,8 @@ def main():
     model.build_model()
     model.discrim_fit()
     model.mpsr_refine()
-    # eval_ = Evaluator(model)
-    # print(eval_.clws('es', 'en'))
+    eval_ = Evaluator(model)
+    print(eval_.clws('es', 'en'))
 
 if __name__ == '__main__':
     main()
