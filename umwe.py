@@ -14,7 +14,7 @@ from evaluation import Evaluator
 from lexica import build_lexicon
 
 class UMWE(nn.Module):
-    def __init__(self, dtype=torch.float32, device=torch.device('cpu'), batch=128):
+    def __init__(self, dtype=torch.float32, device=torch.device('cpu'), batch=128, epoch=2):
         super(UMWE, self).__init__()
         self.dtype = dtype
         self.device = device
@@ -28,11 +28,13 @@ class UMWE(nn.Module):
         self.encdec  = None
         self.discriminators = None
         self.max_rank = 15000
+        self.freq = 75000
         self.lexica_method = 'nn'
         self.lexica = {}
         self.discrim_optimizer = None
         self.mapping_optimizer = None
         self.mpsr_optimizer = None
+        self.epoch = epoch
         
     def load_embeddings(self, lang, emb_path):
         if emb_path.endswith('.pth'):
@@ -73,9 +75,19 @@ class UMWE(nn.Module):
             print(f"Text Embeddings Loaded for language = {lang}")
             return dico, embeddings
     
-    def export_embeddings(self, lang, export_embs, filetype):
+    def export_embeddings(self, lang, export_embs, filetype, after=None):
         if filetype == "pth":
             torch.save({'dico': self.vocabs[lang], 'vectors': export_embs[lang]}, 'wiki.{}.pth'.format(lang))
+        elif filetype == "txt":
+            emb_lang = self.encdec[lang](self.embs[lang].weight)
+            with io.open(f'vectors-{lang}-{after}.txt', 'w', encoding='utf-8') as f:
+                f.write(u"%i %i\n" % emb_lang.shape)
+                for i in range(len(self.vocabs[lang])):
+                    if not i % 5000:
+                        print(i)
+                    if i == 50000:
+                        break
+                    f.write(u"%s %s\n" % (self.vocabs[lang][i], " ".join('%.5f' % x for x in emb_lang[i])))
     
     def build_model(self):
         _src_embs = {}
@@ -121,7 +133,7 @@ class UMWE(nn.Module):
         self.encdec = encdec
         self.discriminators = disc
         self.vocabs = vocabs
-                 
+        
         for lang in self.langs:
             export_embs = _src_embs.copy()
             export_embs[self.tgt_lang] = emb
@@ -131,7 +143,7 @@ class UMWE(nn.Module):
         self.mapping_optimizer = {lang: optim.SGD(self.encdec[lang].parameters(), lr=0.1) for lang in self.langs}
         self.mpsr_optimizer = {lang: optim.Adam(self.encdec[lang].parameters()) for lang in self.langs}
         
-    def discrim_step(self, freq):
+    def discrim_step(self):
         
         for disc in self.discriminators.values():
             disc.train()
@@ -141,8 +153,8 @@ class UMWE(nn.Module):
         
         for dec_lang in self.langs:
             enc_lang = np.random.choice(self.langs)
-            src_id = torch.LongTensor(self.batch).random_(freq).to(self.device)
-            tgt_id = torch.LongTensor(self.batch).random_(freq).to(self.device)
+            src_id = torch.LongTensor(self.batch).random_(self.freq).to(self.device)
+            tgt_id = torch.LongTensor(self.batch).random_(self.freq).to(self.device)
             
             with torch.set_grad_enabled(False):
                 src_emb = self.embs[enc_lang](src_id).detach()
@@ -166,7 +178,7 @@ class UMWE(nn.Module):
         
         return discrim_loss.data.item()
          
-    def mapping_step(self, freq):
+    def mapping_step(self):
         
         for disc in self.discriminators.values():
             disc.eval()
@@ -179,8 +191,8 @@ class UMWE(nn.Module):
             # Select a random input language (dec_lang and enc_lang can be same - allowed - Adversarial Autoencoder)
             enc_lang = np.random.choice(self.langs)
             # Select a batch of random word IDs both for input and target langs
-            src_id = torch.LongTensor(self.batch).random_(freq).to(self.device)
-            tgt_id = torch.LongTensor(self.batch).random_(freq).to(self.device)
+            src_id = torch.LongTensor(self.batch).random_(self.freq).to(self.device)
+            tgt_id = torch.LongTensor(self.batch).random_(self.freq).to(self.device)
             
             with torch.set_grad_enabled(False):
                 # Get corresponding random word embeddings
@@ -197,7 +209,8 @@ class UMWE(nn.Module):
             y_true = torch.FloatTensor(2 * self.batch).zero_()
             
             # Classify real embeddings as 1, keep others 0
-            y_true[:self.batch] = 1
+            y_true[:self.batch] = 1 - 0.1
+            y_true[self.batch:] = 0.1
             y_true = y_true.to(self.device)
             preds = self.discriminators[enc_lang](x_to_disc).flatten()
             mapping_loss += criterion(preds, 1 - y_true)
@@ -215,24 +228,23 @@ class UMWE(nn.Module):
         return mapping_loss.data.item()
     
     def discrim_fit(self):
-        freq = 75000
         
-        for epoch in range(1):    
+        for epoch in range(5):    
             discrim_loss_list = []
             start = time.time()
-            for n_iter in range(0,200000, self.batch):
+            for n_iter in range(0, 1000000, self.batch):
                 
-                # for n in range(5):
-                #     discrim_loss_list.append(self.discrim_step(freq))
-                # discrim_loss = np.array(discrim_loss_list)
-                discrim_loss = self.discrim_step(freq)
-                map_loss = self.mapping_step(freq)
+                for n in range(5):
+                    discrim_loss_list.append(self.discrim_step())
+                discrim_loss = np.array(discrim_loss_list)
+                # discrim_loss = self.discrim_step()
+                map_loss = self.mapping_step()
                 
                 if n_iter % 500 == 0:  
                     print(f'n_iter = {n_iter}',end=' ')
                     print("Discriminator Loss = ", end=' ')
-                    # print(f'{np.mean(discrim_loss):.4f}', end=' ')
-                    print(f'{discrim_loss:.4f}', end=' ')
+                    print(f'{np.mean(discrim_loss):.4f}', end=' ')
+                    # print(f'{discrim_loss:.4f}', end=' ')
                     print("Mappings Loss = ", end=' ')
                     print(f'{map_loss:.4f}', end=' ')
                     end = time.time()
@@ -311,14 +323,14 @@ class UMWE(nn.Module):
         return mpsr_loss.data.item()
     
     def mpsr_refine(self):
-        for epoch in range(1):
+        for epoch in range(5):
             # Create lexica from embeddings aligned using MAT in the previous step
             self.mpsr_dictionary()
 
             # Optimize MPSR
             start = time.time()
             mpsr_loss_list = []
-            for n_iter in range(30000):
+            for n_iter in range(10000):
                 # MPSR train step
                 mpsr_loss_list.append(self.mpsr_step())
                 # Log loss and other stats
@@ -332,7 +344,6 @@ class UMWE(nn.Module):
                     mpsr_loss_list = []
 
             
-            
 def main():
     USE_GPU = True
     if USE_GPU and torch.cuda.is_available():
@@ -344,10 +355,14 @@ def main():
     print('using device:', device)
     dtype = torch.float32
     
-    model = UMWE(dtype, device, 128)
+    model = UMWE(dtype, device, 128, 1)
     model.build_model()
     model.discrim_fit()
+   # for lang in model.src_langs.values():
+    model.export_embeddings('es', model.embs, "txt", 'mat')
     model.mpsr_refine()
+ #   for lang in model.src_langs.values():
+    model.export_embeddings('es', model.embs, "txt", 'mpsr')
     eval_ = Evaluator(model)
     print(eval_.clws('es', 'en'))
 
