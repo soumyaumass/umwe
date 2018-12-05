@@ -117,7 +117,6 @@ class Evaluator():
         q = src_emb[my_dict[:,0]].to(torch.device('cpu'))
         del src_emb
         gc.collect()
-        print(tgt_emb.shape)
         score = q.mm(tgt_emb.transpose(0,1))
         
         result = []

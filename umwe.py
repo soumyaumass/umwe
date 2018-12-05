@@ -124,8 +124,6 @@ class UMWE(nn.Module):
         
         for ed in encdec.values():
             ed.weight.data.copy_(torch.eye(self.dim))
-            for p in ed.parameters():
-                print(p.data.shape)
         
         disc = {lang: Discriminator(lang).to(self.device) for lang in self.langs}
         
@@ -166,7 +164,8 @@ class UMWE(nn.Module):
             x_to_disc = torch.cat([src_emb, tgt_emb], 0)
             y_true = torch.FloatTensor(2 * self.batch).zero_()
             
-            y_true[:self.batch] = 1
+            y_true[:self.batch] = 1 - 0.1
+            y_true[self.batch:] = 0.1
             y_true = y_true.to(self.device)
             
             preds = self.discriminators[dec_lang](x_to_disc).flatten()
@@ -233,7 +232,7 @@ class UMWE(nn.Module):
         for epoch in range(self.epoch):    
             discrim_loss_list = []
             start = time.time()
-            for n_iter in range(0, 500000, self.batch):
+            for n_iter in range(0, 400000, self.batch):
                 
                 for n in range(5):
                     discrim_loss_list.append(self.discrim_step())
@@ -361,7 +360,7 @@ def main():
 #     f.close()
 #     
 # =============================================================================
-    model = UMWE(dtype, device, 128, 3)
+    model = UMWE(dtype, device, 128, 2)
     model.build_model()
     model.discrim_fit()
     filename = 'curr_model'
