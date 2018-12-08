@@ -1,6 +1,8 @@
 import os
+import pickle
 import io
 import time
+import itertools
 import numpy as np
 import torch
 import torch.optim as optim
@@ -134,13 +136,14 @@ class UMWE(nn.Module):
         self.discriminators = disc
         self.vocabs = vocabs
         
-        for lang in self.langs:
-            export_embs = _src_embs.copy()
-            export_embs[self.tgt_lang] = emb
-            self.export_embeddings(lang, export_embs, "pth")
-        
-        self.discrim_optimizer = {lang: optim.SGD(self.discriminators[lang].parameters(), lr=0.1) for lang in self.langs}
-        self.mapping_optimizer = {lang: optim.SGD(self.encdec[lang].parameters(), lr=0.1) for lang in self.langs}
+        if pth_or_vec != 'pth':
+            for lang in self.langs:
+                export_embs = _src_embs.copy()
+                export_embs[self.tgt_lang] = emb
+                self.export_embeddings(lang, export_embs, "pth")
+ 
+        self.discrim_optimizer = optim.SGD(itertools.chain(*[d.parameters() for d in self.discriminators.values()]), lr=0.1)
+        self.mapping_optimizer = optim.SGD(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]), lr=0.1)
         self.mpsr_optimizer = {lang: optim.Adam(self.encdec[lang].parameters()) for lang in self.langs}
         
     def discrim_step(self):
@@ -165,16 +168,17 @@ class UMWE(nn.Module):
             x_to_disc = torch.cat([src_emb, tgt_emb], 0)
             y_true = torch.FloatTensor(2 * self.batch).zero_()
             
-            y_true[:self.batch] = 1
+            y_true[:self.batch] = 1 - 0.1
+            y_true[self.batch:] = 0.1
             y_true = y_true.to(self.device)
             
             preds = self.discriminators[dec_lang](x_to_disc).flatten()
             # Calculate discriminator loss - assign 0 to fake and 1 to real embeddings
             discrim_loss += criterion(preds, y_true)
             
-        self.discrim_optimizer[dec_lang].zero_grad()
+        self.discrim_optimizer.zero_grad()
         discrim_loss.backward(retain_graph=True)
-        self.discrim_optimizer[dec_lang].step()
+        self.discrim_optimizer.step()
         
         return discrim_loss.data.item()
          
@@ -216,9 +220,9 @@ class UMWE(nn.Module):
             mapping_loss += criterion(preds, 1 - y_true)
             
             
-        self.mapping_optimizer[dec_lang].zero_grad()
+        self.mapping_optimizer.zero_grad()
         mapping_loss.backward(retain_graph=True)
-        self.mapping_optimizer[dec_lang].step()
+        self.mapping_optimizer.step()
         
         beta = 0.001
         for mapping in self.encdec.values():
@@ -232,7 +236,7 @@ class UMWE(nn.Module):
         for epoch in range(5):    
             discrim_loss_list = []
             start = time.time()
-            for n_iter in range(0, 1000000, self.batch):
+            for n_iter in range(0, 400000, self.batch):
                 
                 for n in range(5):
                     discrim_loss_list.append(self.discrim_step())
@@ -355,16 +359,30 @@ def main():
     print('using device:', device)
     dtype = torch.float32
     
-    model = UMWE(dtype, device, 128, 1)
+# =============================================================================
+#     filename = 'curr_model'
+#     f = open(filename, 'rb')
+#     model = pickle.load(f)
+#     f.close()
+#     
+# =============================================================================
+    model = UMWE(dtype, device, 128, 2)
     model.build_model()
     model.discrim_fit()
-   # for lang in model.src_langs.values():
-    model.export_embeddings('es', model.embs, "txt", 'mat')
-    model.mpsr_refine()
- #   for lang in model.src_langs.values():
-    model.export_embeddings('es', model.embs, "txt", 'mpsr')
+    filename = 'curr_model'
+    f = open(filename, 'wb')
+    pickle.dump(model, f)
+    f.close()
+# =============================================================================
+#     model.mpsr_refine()
+# =============================================================================
+# =============================================================================
+#     for lang in model.src_langs.values():
+#         model.export_embeddings(lang, model.embs, "txt")
+# =============================================================================
     eval_ = Evaluator(model)
     print(eval_.clws('es', 'en'))
+    eval_.word_translation('es', 'en')
 
 if __name__ == '__main__':
     main()
