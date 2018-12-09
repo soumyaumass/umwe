@@ -144,7 +144,7 @@ class UMWE(nn.Module):
  
         self.discrim_optimizer = optim.SGD(itertools.chain(*[d.parameters() for d in self.discriminators.values()]), lr=0.1)
         self.mapping_optimizer = optim.SGD(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]), lr=0.1)
-        self.mpsr_optimizer = {lang: optim.Adam(self.encdec[lang].parameters()) for lang in self.langs}
+        self.mpsr_optimizer = optim.Adam(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]))
         
     def discrim_step(self):
         
