@@ -20,9 +20,9 @@ class UMWE(nn.Module):
         super(UMWE, self).__init__()
         self.dtype = dtype
         self.device = device
-        self.src_langs = {0:'es', 1:'fa'}
+        self.src_langs = { 0: 'es', 1: 'de', 2:'fa', 3: 'it', 4:'hi' }
         self.tgt_lang = 'en'
-        self.langs = ['en', 'es', 'fa']
+        self.langs = ['en', 'es', 'de', 'fa', 'it', 'hi']
         self.dim = 300
         self.batch = batch
         self.embs = None
@@ -32,7 +32,7 @@ class UMWE(nn.Module):
         self.max_vocabs = 200000
         self.max_export_vocabs = 50000
         self.max_rank = 15000
-        self.freq = 90000
+        self.freq = 100000
         self.lexica_method = 'nn'
         self.lexica = {}
         self.discrim_optimizer = None
@@ -337,7 +337,7 @@ class UMWE(nn.Module):
             # Optimize MPSR
             start = time.time()
             mpsr_loss_list = []
-            for n_iter in range(10000):
+            for n_iter in range(20000):
                 # MPSR train step
                 mpsr_loss_list.append(self.mpsr_step())
                 # Log loss and other stats
@@ -372,17 +372,42 @@ def main():
     model = UMWE(dtype, device, 32, 5)
     model.build_model()
     model.discrim_fit()
-    filename = 'curr_model'
+    filename = 'curr_model_mat'
     f = open(filename, 'wb')
     pickle.dump(model, f)
     f.close()
-# =============================================================================
-#     model.mpsr_refine()
-# =============================================================================
+    model.mpsr_refine()
+    filename = 'curr_model_mat_mpsr'
+    f = open(filename, 'wb')
+    pickle.dump(model, f)
+    f.close()
+    
     for lang in model.src_langs.values():
         model.export_embeddings(lang, model.embs, "txt")
+        
     eval_ = Evaluator(model)
+    print('CLWS (en,es) =', end=' ')
     print(eval_.clws('es', 'en'))
+    print('CLWS (en,fa) =', end=' ')
+    print(eval_.clws('fa', 'en'))
+    print('CLWS (es,fa) =', end=' ')
+    print(eval_.clws('fa', 'es'))
+    print('CLWS (en,it) =', end=' ')
+    print(eval_.clws('it', 'en'))
+    print('CLWS (es,it) =', end=' ')
+    print(eval_.clws('it', 'es'))
+    print('CLWS (it,fa) =', end=' ')
+    print(eval_.clws('fa', 'it'))
+    print('CLWS (de,fa) =', end=' ')
+    print(eval_.clws('fa', 'de'))
+    print('CLWS (de,es) =', end=' ')
+    print(eval_.clws('es', 'de'))
+    print('CLWS (de,it) =', end=' ')
+    print(eval_.clws('it', 'de'))
+    print('CLWS (en,de) =', end=' ')
+    print(eval_.clws('de', 'en'))
+    
+    print('Translation (en,es) =')
     eval_.word_translation('es', 'en')
 
 if __name__ == '__main__':
