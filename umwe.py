@@ -237,7 +237,7 @@ class UMWE(nn.Module):
     
     def discrim_fit(self):
         
-        for epoch in range(1):    
+        for epoch in range(self.epoch):    
             discrim_loss_list = []
             start = time.time()
             for n_iter in range(0, 1000000, self.batch):
@@ -252,7 +252,6 @@ class UMWE(nn.Module):
                     print(f'n_iter = {n_iter}',end=' ')
                     print("Discriminator Loss = ", end=' ')
                     print(f'{np.mean(discrim_loss):.4f}', end=' ')
-                    # print(f'{discrim_loss:.4f}', end=' ')
                     print("Mappings Loss = ", end=' ')
                     print(f'{map_loss:.4f}', end=' ')
                     end = time.time()
