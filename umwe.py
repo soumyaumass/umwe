@@ -172,12 +172,12 @@ class UMWE(nn.Module):
             y_true[self.batch:] = 0.1
             y_true = y_true.to(self.device)
             
-            preds = self.discriminators[dec_lang](x_to_disc).flatten()
+            preds = self.discriminators[dec_lang](x_to_disc)
             # Calculate discriminator loss - assign 0 to fake and 1 to real embeddings
             discrim_loss += criterion(preds, y_true)
             
         self.discrim_optimizer.zero_grad()
-        discrim_loss.backward(retain_graph=True)
+        discrim_loss.backward()
         self.discrim_optimizer.step()
         
         return discrim_loss.data.item()
@@ -198,14 +198,14 @@ class UMWE(nn.Module):
             src_id = torch.LongTensor(self.batch).random_(self.freq).to(self.device)
             tgt_id = torch.LongTensor(self.batch).random_(self.freq).to(self.device)
             
-            with torch.set_grad_enabled(False):
+            with torch.set_grad_enabled(True):
                 # Get corresponding random word embeddings
-                src_emb = self.embs[enc_lang](src_id).detach()
-                tgt_emb = self.embs[dec_lang](tgt_id).detach()
+                src_emb = self.embs[dec_lang](src_id).detach()
+                tgt_emb = self.embs[enc_lang](tgt_id).detach()
                 # Encode to target space
-                src_emb = self.encdec[enc_lang](src_emb)
+                src_emb = self.encdec[dec_lang](src_emb)
                 # Decode to target language space
-                src_emb = F.linear(src_emb, self.encdec[dec_lang].weight.t())
+                src_emb = F.linear(src_emb, self.encdec[enc_lang].weight.t())
             
             # Concatenate real and mapped embeddings
             x_to_disc = torch.cat([src_emb, tgt_emb], 0)
@@ -216,12 +216,12 @@ class UMWE(nn.Module):
             y_true[:self.batch] = 1 - 0.1
             y_true[self.batch:] = 0.1
             y_true = y_true.to(self.device)
-            preds = self.discriminators[enc_lang](x_to_disc).flatten()
+            preds = self.discriminators[enc_lang](x_to_disc)
             mapping_loss += criterion(preds, 1 - y_true)
             
             
         self.mapping_optimizer.zero_grad()
-        mapping_loss.backward(retain_graph=True)
+        mapping_loss.backward()
         self.mapping_optimizer.step()
         
         beta = 0.001
@@ -233,7 +233,7 @@ class UMWE(nn.Module):
     
     def discrim_fit(self):
         
-        for epoch in range(5):    
+        for epoch in range(1):    
             discrim_loss_list = []
             start = time.time()
             for n_iter in range(0, 400000, self.batch):
@@ -366,7 +366,7 @@ def main():
 #     f.close()
 #     
 # =============================================================================
-    model = UMWE(dtype, device, 128, 2)
+    model = UMWE(dtype, device, 32, 2)
     model.build_model()
     model.discrim_fit()
     filename = 'curr_model'
