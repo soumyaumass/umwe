@@ -236,7 +236,7 @@ class UMWE(nn.Module):
         for epoch in range(1):    
             discrim_loss_list = []
             start = time.time()
-            for n_iter in range(0, 400000, self.batch):
+            for n_iter in range(0, 1000, self.batch):
                 
                 for n in range(5):
                     discrim_loss_list.append(self.discrim_step())
@@ -327,14 +327,14 @@ class UMWE(nn.Module):
         return mpsr_loss.data.item()
     
     def mpsr_refine(self):
-        for epoch in range(5):
+        for epoch in range(1):
             # Create lexica from embeddings aligned using MAT in the previous step
             self.mpsr_dictionary()
 
             # Optimize MPSR
             start = time.time()
             mpsr_loss_list = []
-            for n_iter in range(10000):
+            for n_iter in range(1000):
                 # MPSR train step
                 mpsr_loss_list.append(self.mpsr_step())
                 # Log loss and other stats
@@ -374,12 +374,13 @@ def main():
     pickle.dump(model, f)
     f.close()
 # =============================================================================
-#     model.mpsr_refine()
+    model.mpsr_refine()
 # =============================================================================
 # =============================================================================
-#     for lang in model.src_langs.values():
-#         model.export_embeddings(lang, model.embs, "txt")
+    # for lang in model.src_langs.values():
+        # model.export_embeddings(lang, model.embs, "txt")
 # =============================================================================
+    model.export_embeddings('es', model.embs, "txt")
     eval_ = Evaluator(model)
     print(eval_.clws('es', 'en'))
     eval_.word_translation('es', 'en')
