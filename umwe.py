@@ -20,9 +20,9 @@ class UMWE(nn.Module):
         super(UMWE, self).__init__()
         self.dtype = dtype
         self.device = device
-        self.src_langs = { 0: 'es', 1: 'de', 2:'fa', 3: 'it', 4:'hi' }
+        self.src_langs = {0:'es', 1:'fa'}
         self.tgt_lang = 'en'
-        self.langs = ['en', 'es', 'de', 'fa', 'it', 'hi']
+        self.langs = ['en', 'es', 'fa']
         self.dim = 300
         self.batch = batch
         self.embs = None
@@ -32,13 +32,18 @@ class UMWE(nn.Module):
         self.max_vocabs = 200000
         self.max_export_vocabs = 50000
         self.max_rank = 15000
-        self.freq = 100000
+        self.freq = 75000
         self.lexica_method = 'nn'
         self.lexica = {}
         self.discrim_optimizer = None
         self.mapping_optimizer = None
         self.mpsr_optimizer = None
         self.epoch = epoch
+        self.mapping_lr = 0.1
+        self.discrim_lr = 0.1
+        self.mpsr_lr = 0.001
+        self.lr_decay = 0.95
+        self.min_lr = 1e-6
         
     def load_embeddings(self, lang, emb_path):
         if emb_path.endswith('.pth'):
@@ -79,12 +84,12 @@ class UMWE(nn.Module):
             print(f"Text Embeddings Loaded for language = {lang}")
             return dico, embeddings
     
-    def export_embeddings(self, lang, export_embs, filetype):
+    def export_embeddings(self, lang, export_embs, filetype, mat_or_mpsr=None):
         if filetype == "pth":
             torch.save({'dico': self.vocabs[lang], 'vectors': export_embs[lang]}, 'wordvecs/wiki.{}.pth'.format(lang))
         elif filetype == "txt":
             emb_lang = self.encdec[lang](self.embs[lang].weight)
-            with io.open(f'wordvecs/vectors-{lang}.txt', 'w', encoding='utf-8') as f:
+            with io.open(f'wordvecs/vectors-{lang}-{mat_or_mpsr}.txt', 'w', encoding='utf-8') as f:
                 f.write(u"%i %i\n" % emb_lang.shape)
                 for i in range(len(self.vocabs[lang])):
                     if not i % 5000:
@@ -92,7 +97,7 @@ class UMWE(nn.Module):
                     if i == self.max_export_vocabs:
                         break
                     f.write(u"%s %s\n" % (self.vocabs[lang][i], " ".join('%.5f' % x for x in emb_lang[i])))
-    
+                
     def build_model(self):
         _src_embs = {}
         src_embs = []
@@ -146,10 +151,32 @@ class UMWE(nn.Module):
             if not os.path.exists(f'wordvecs/wiki.{lang}.pth'):
                 self.export_embeddings(lang, export_embs, "pth")
  
-        self.discrim_optimizer = optim.SGD(itertools.chain(*[d.parameters() for d in self.discriminators.values()]), lr=0.1)
-        self.mapping_optimizer = optim.SGD(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]), lr=0.1)
-        self.mpsr_optimizer = optim.Adam(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]), lr=0.001)
+        self.discrim_optimizer = optim.SGD(itertools.chain(*[d.parameters() for d in self.discriminators.values()]), lr=self.discrim_lr)
+        self.mapping_optimizer = optim.SGD(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]), lr=self.mapping_lr)
+        self.mpsr_optimizer = optim.Adam(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]), lr=self.mpsr_lr)
         
+    def update_lr(self):
+ 
+        old_lr = self.mapping_lr
+        new_lr = max(self.min_lr, old_lr * self.lr_decay)
+        
+        if new_lr < old_lr:
+            print("Decreasing learning rate: %.8f -> %.8f" % (old_lr, new_lr))
+            self.mapping_lr = new_lr
+            for param_group in self.mapping_optimizer.param_groups:
+                param_group['lr'] = self.mapping_lr
+
+    def update_mpsr_lr(self):
+        
+        old_lr = self.mpsr_lr
+        new_lr = max(self.min_lr, old_lr * self.lr_decay)
+        
+        if new_lr < old_lr:
+            print("Decreasing learning rate: %.8f -> %.8f" % (old_lr, new_lr))
+            self.mpsr_lr = new_lr
+            for param_group in self.mpsr_optimizer.param_groups:
+                param_group['lr'] = self.mpsr_lr
+                
     def discrim_step(self):
         
         for disc in self.discriminators.values():
@@ -221,8 +248,7 @@ class UMWE(nn.Module):
             y_true[self.batch:] = 0.1
             y_true = y_true.to(self.device)
             preds = self.discriminators[enc_lang](x_to_disc)
-            mapping_loss += criterion(preds, 1 - y_true)
-            
+            mapping_loss += criterion(preds, 1 - y_true)    
             
         self.mapping_optimizer.zero_grad()
         mapping_loss.backward()
@@ -258,6 +284,8 @@ class UMWE(nn.Module):
                     print(f'Time = {(end-start):.2f}')
                     start = end
                     discrim_loss_list = []
+            
+            self.update_lr()
                 
     
     def mpsr_dictionary(self):
@@ -318,9 +346,9 @@ class UMWE(nn.Module):
 
             mpsr_loss += F.mse_loss(lang1_emb, lang2_emb)
         
-        self.mpsr_optimizer[lang2].zero_grad()
+        self.mpsr_optimizer.zero_grad()
         mpsr_loss.backward(retain_graph=True)
-        self.mpsr_optimizer[lang2].step()
+        self.mpsr_optimizer.step()
 
         beta = 0.001
         for mapping in self.encdec.values():
@@ -337,7 +365,7 @@ class UMWE(nn.Module):
             # Optimize MPSR
             start = time.time()
             mpsr_loss_list = []
-            for n_iter in range(20000):
+            for n_iter in range(30000):
                 # MPSR train step
                 mpsr_loss_list.append(self.mpsr_step())
                 # Log loss and other stats
@@ -350,7 +378,8 @@ class UMWE(nn.Module):
                     start = end
                     mpsr_loss_list = []
 
-            
+        self.update_mpsr_lr()
+        
 def main():
     USE_GPU = True
     if USE_GPU and torch.cuda.is_available():
@@ -362,53 +391,34 @@ def main():
     print('using device:', device)
     dtype = torch.float32
     
-# =============================================================================
-#     filename = 'curr_model'
-#     f = open(filename, 'rb')
-#     model = pickle.load(f)
-#     f.close()
-#     
-# =============================================================================
-    model = UMWE(dtype, device, 32, 5)
+    '''    
+    filename = 'curr_model_test'
+    f = open(filename, 'rb')
+    model = pickle.load(f)
+    f.close()
+
+    '''
+    model = UMWE(dtype, device, 32, 2)
     model.build_model()
     model.discrim_fit()
-    filename = 'curr_model_mat'
+    filename = 'curr_model_test'
     f = open(filename, 'wb')
     pickle.dump(model, f)
     f.close()
-    model.mpsr_refine()
-    filename = 'curr_model_mat_mpsr'
-    f = open(filename, 'wb')
-    pickle.dump(model, f)
-    f.close()
-    
-    for lang in model.src_langs.values():
-        model.export_embeddings(lang, model.embs, "txt")
-        
+
     eval_ = Evaluator(model)
-    print('CLWS (en,es) =', end=' ')
     print(eval_.clws('es', 'en'))
-    print('CLWS (en,fa) =', end=' ')
-    print(eval_.clws('fa', 'en'))
-    print('CLWS (es,fa) =', end=' ')
     print(eval_.clws('fa', 'es'))
-    print('CLWS (en,it) =', end=' ')
-    print(eval_.clws('it', 'en'))
-    print('CLWS (es,it) =', end=' ')
-    print(eval_.clws('it', 'es'))
-    print('CLWS (it,fa) =', end=' ')
-    print(eval_.clws('fa', 'it'))
-    print('CLWS (de,fa) =', end=' ')
-    print(eval_.clws('fa', 'de'))
-    print('CLWS (de,es) =', end=' ')
-    print(eval_.clws('es', 'de'))
-    print('CLWS (de,it) =', end=' ')
-    print(eval_.clws('it', 'de'))
-    print('CLWS (en,de) =', end=' ')
-    print(eval_.clws('de', 'en'))
-    
-    print('Translation (en,es) =')
     eval_.word_translation('es', 'en')
+    eval_.word_translation('en', 'es')
+
+    model.mpsr_refine()
+    for lang in model.src_langs.values():
+        model.export_embeddings(lang, model.embs, "txt", "test")
+    print(eval_.clws('es', 'en'))
+    print(eval_.clws('fa', 'es'))
+    eval_.word_translation('es', 'en')
+    eval_.word_translation('en', 'es')
 
 if __name__ == '__main__':
     main()

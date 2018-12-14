@@ -67,14 +67,16 @@ class Evaluator():
         return spearmanr(true, preds)[0], len(true), not_found
     
     def get_cross_lingual_score(self, src_lang, src_word2id, src_emb, tgt_lang, tgt_word2id, tgt_emb):
-        path = './crosslingual/wordsim'
+        path = '/crosslingual/wordsim'
         src_tgt = os.path.join(path, f'{src_lang}-{tgt_lang}-SEMEVAL17.txt')
         tgt_src = os.path.join(path, f'{tgt_lang}-{src_lang}-SEMEVAL17.txt')
         rho = 0.
         
         if os.path.exists(src_tgt):
+            print(src_tgt)
             rho, found, not_found = self.spearman_correlation(src_word2id, src_emb, src_tgt, tgt_word2id, tgt_emb)
         elif os.path.exists(tgt_src):
+            print(tgt_src)
             rho, found, not_found = self.spearman_correlation(tgt_word2id, tgt_emb, tgt_src, src_word2id, src_emb)
         
         return rho
@@ -99,9 +101,9 @@ class Evaluator():
         return my_dict
 
     def translation_accuracy(self, src_lang, word2id1, src_emb, tgt_lang, word2id2, tgt_emb):
-        path = os.path.join('./translation', f'{tgt_lang}-{src_lang}.5000-6500.txt')
+        path = os.path.join('translation/', f'{tgt_lang}-{src_lang}.5000-6500.txt')
         if not os.path.exists(path):
-            path = os.path.join('./', f'{src_lang}-{tgt_lang}.5000-6500.txt')
+            path = os.path.join('translation/', f'{src_lang}-{tgt_lang}.5000-6500.txt')
         my_dict = self.load_dict(path, word2id1, word2id2)
         src_emb = src_emb.to(torch.device('cpu'))
         tgt_emb = tgt_emb.to(torch.device('cpu'))
@@ -140,3 +142,4 @@ class Evaluator():
         tgt_emb = self.encode_decode(self.encdec[tgt_lang], self.embs[tgt_lang].weight)
         scores = self.translation_accuracy(src_lang, self.vocab[src_lang].word2id, src_emb, tgt_lang, self.vocab[tgt_lang].word2id, tgt_emb)
         print(scores)
+
