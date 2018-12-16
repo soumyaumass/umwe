@@ -29,6 +29,8 @@ class UMWE(nn.Module):
         self.vocabs = None
         self.encdec  = None
         self.discriminators = None
+        self.max_vocabs = 200000
+        self.max_export_vocabs = 50000
         self.max_rank = 15000
         self.freq = 75000
         self.lexica_method = 'nn'
@@ -37,6 +39,11 @@ class UMWE(nn.Module):
         self.mapping_optimizer = None
         self.mpsr_optimizer = None
         self.epoch = epoch
+        self.mapping_lr = 0.1
+        self.discrim_lr = 0.1
+        self.mpsr_lr = 0.001
+        self.lr_decay = 0.95
+        self.min_lr = 1e-6
         
     def load_embeddings(self, lang, emb_path):
         if emb_path.endswith('.pth'):
@@ -66,7 +73,7 @@ class UMWE(nn.Module):
                     
                         word2id[word] = len(word2id)
                         vectors.append(vect[None])
-                        if i == 200000:
+                        if i == self.max_vocabs:
                             break    
             
             id2word = {v:k for k,v in word2id.items()}
@@ -77,20 +84,20 @@ class UMWE(nn.Module):
             print(f"Text Embeddings Loaded for language = {lang}")
             return dico, embeddings
     
-    def export_embeddings(self, lang, export_embs, filetype, after=None):
+    def export_embeddings(self, lang, export_embs, filetype, mat_or_mpsr=None):
         if filetype == "pth":
-            torch.save({'dico': self.vocabs[lang], 'vectors': export_embs[lang]}, 'wiki.{}.pth'.format(lang))
+            torch.save({'dico': self.vocabs[lang], 'vectors': export_embs[lang]}, 'wordvecs/wiki.{}.pth'.format(lang))
         elif filetype == "txt":
             emb_lang = self.encdec[lang](self.embs[lang].weight)
-            with io.open(f'vectors-{lang}-{after}.txt', 'w', encoding='utf-8') as f:
+            with io.open(f'wordvecs/vectors-{lang}-{mat_or_mpsr}.txt', 'w', encoding='utf-8') as f:
                 f.write(u"%i %i\n" % emb_lang.shape)
                 for i in range(len(self.vocabs[lang])):
                     if not i % 5000:
-                        print(i)
-                    if i == 50000:
+                        print(f"{i} words written")
+                    if i == self.max_export_vocabs:
                         break
                     f.write(u"%s %s\n" % (self.vocabs[lang][i], " ".join('%.5f' % x for x in emb_lang[i])))
-    
+                
     def build_model(self):
         _src_embs = {}
         src_embs = []
@@ -98,13 +105,15 @@ class UMWE(nn.Module):
         vocabs = {}
         EMB_DIR = './'
         pth_or_vec = "pth"
-        if os.path.exists("wiki.en.pth") == False:
-            pth_or_vec = "vec"
-            print("Pretrained Pytorch embedding files not found")
             
         for lang in self.langs:
-            src_embs.append(os.path.join(EMB_DIR, f'wiki.{lang}.{pth_or_vec}'))
-            
+            if not os.path.exists(f'wordvecs/wiki.{lang}.pth'):
+                pth_or_vec = "vec"
+                print(f"Pretrained Pytorch embedding file not found for language {lang}")
+            else:
+                pth_or_vec = "pth"
+            src_embs.append(os.path.join(EMB_DIR, f'wordvecs/wiki.{lang}.{pth_or_vec}'))
+
         for i in range(len(self.src_langs)):
             dico, emb = self.load_embeddings(self.src_langs[i], src_embs[i+1])
             vocabs[self.src_langs[i]] = dico
@@ -136,16 +145,38 @@ class UMWE(nn.Module):
         self.discriminators = disc
         self.vocabs = vocabs
         
-        if pth_or_vec != 'pth':
-            for lang in self.langs:
-                export_embs = _src_embs.copy()
-                export_embs[self.tgt_lang] = emb
+        export_embs = _src_embs.copy()
+        export_embs[self.tgt_lang] = emb
+        for lang in self.langs:
+            if not os.path.exists(f'wordvecs/wiki.{lang}.pth'):
                 self.export_embeddings(lang, export_embs, "pth")
  
-        self.discrim_optimizer = optim.SGD(itertools.chain(*[d.parameters() for d in self.discriminators.values()]), lr=0.1)
-        self.mapping_optimizer = optim.SGD(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]), lr=0.1)
-        self.mpsr_optimizer = optim.Adam(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]))
+        self.discrim_optimizer = optim.SGD(itertools.chain(*[d.parameters() for d in self.discriminators.values()]), lr=self.discrim_lr)
+        self.mapping_optimizer = optim.SGD(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]), lr=self.mapping_lr)
+        self.mpsr_optimizer = optim.Adam(itertools.chain(*[ed.parameters() for lang,ed in self.encdec.items() if lang!=self.tgt_lang]), lr=self.mpsr_lr)
         
+    def update_lr(self):
+ 
+        old_lr = self.mapping_lr
+        new_lr = max(self.min_lr, old_lr * self.lr_decay)
+        
+        if new_lr < old_lr:
+            print("Decreasing learning rate: %.8f -> %.8f" % (old_lr, new_lr))
+            self.mapping_lr = new_lr
+            for param_group in self.mapping_optimizer.param_groups:
+                param_group['lr'] = self.mapping_lr
+
+    def update_mpsr_lr(self):
+        
+        old_lr = self.mpsr_lr
+        new_lr = max(self.min_lr, old_lr * self.lr_decay)
+        
+        if new_lr < old_lr:
+            print("Decreasing learning rate: %.8f -> %.8f" % (old_lr, new_lr))
+            self.mpsr_lr = new_lr
+            for param_group in self.mpsr_optimizer.param_groups:
+                param_group['lr'] = self.mpsr_lr
+                
     def discrim_step(self):
         
         for disc in self.discriminators.values():
@@ -219,7 +250,6 @@ class UMWE(nn.Module):
             preds = self.discriminators[enc_lang](x_to_disc)
             mapping_loss += criterion(preds, 1 - y_true)
             
-            
         self.mapping_optimizer.zero_grad()
         mapping_loss.backward()
         self.mapping_optimizer.step()
@@ -236,7 +266,7 @@ class UMWE(nn.Module):
         for epoch in range(1):    
             discrim_loss_list = []
             start = time.time()
-            for n_iter in range(0, 1000, self.batch):
+            for n_iter in range(0, 1000000, self.batch):
                 
                 for n in range(5):
                     discrim_loss_list.append(self.discrim_step())
@@ -255,6 +285,8 @@ class UMWE(nn.Module):
                     print(f'Time = {(end-start):.2f}')
                     start = end
                     discrim_loss_list = []
+            
+            self.update_lr()
                 
     def mpsr_dictionary(self):
         for i, lang1 in enumerate(self.langs):
@@ -335,7 +367,7 @@ class UMWE(nn.Module):
             # Optimize MPSR
             start = time.time()
             mpsr_loss_list = []
-            for n_iter in range(1000):
+            for n_iter in range(30000):
                 # MPSR train step
                 mpsr_loss_list.append(self.mpsr_step())
                 # Log loss and other stats
@@ -348,7 +380,8 @@ class UMWE(nn.Module):
                     start = end
                     mpsr_loss_list = []
 
-            
+        self.update_mpsr_lr()
+        
 def main():
     USE_GPU = True
     if USE_GPU and torch.cuda.is_available():
@@ -360,31 +393,34 @@ def main():
     print('using device:', device)
     dtype = torch.float32
     
-# =============================================================================
-#     filename = 'curr_model'
-#     f = open(filename, 'rb')
-#     model = pickle.load(f)
-#     f.close()
-#     
-# =============================================================================
+    '''    
+    filename = 'curr_model_test'
+    f = open(filename, 'rb')
+    model = pickle.load(f)
+    f.close()
+
+    '''
     model = UMWE(dtype, device, 32, 2)
     model.build_model()
-    # model.discrim_fit()
-    # filename = 'curr_model'
-    # f = open(filename, 'wb')
-    # pickle.dump(model, f)
-    # f.close()
-# =============================================================================
-    model.mpsr_refine()
-# =============================================================================
-# =============================================================================
-    # for lang in model.src_langs.values():
-        # model.export_embeddings(lang, model.embs, "txt")
-# =============================================================================
-    model.export_embeddings('es', model.embs, "txt")
+    model.discrim_fit()
+    filename = 'curr_model_test'
+    f = open(filename, 'wb')
+    pickle.dump(model, f)
+    f.close()
+
     eval_ = Evaluator(model)
     print(eval_.clws('es', 'en'))
+    print(eval_.clws('fa', 'es'))
     eval_.word_translation('es', 'en')
+    eval_.word_translation('en', 'es')
+
+    model.mpsr_refine()
+    for lang in model.src_langs.values():
+        model.export_embeddings(lang, model.embs, "txt", "test")
+    print(eval_.clws('es', 'en'))
+    print(eval_.clws('fa', 'es'))
+    eval_.word_translation('es', 'en')
+    eval_.word_translation('en', 'es')
 
 if __name__ == '__main__':
     main()

@@ -1,20 +1,5 @@
-# Original work Copyright (c) 2017-present, Facebook, Inc.
-# Modified work Copyright (c) 2018, Xilun Chen
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-#
-
-from logging import getLogger
 import torch
 import pdb
-
-# from .utils import get_nn_avg_dist
-
-
-logger = getLogger()
-
 
 def get_candidates(params, emb1, emb2):
     """
@@ -104,7 +89,6 @@ def build_lexicon(params, src_emb, tgt_emb):
     """
     Build a training dictionary given current embeddings / mapping.
     """
-    logger.info("Building the train dictionary ...")
 
     # pdb.set_trace()
 
@@ -117,11 +101,9 @@ def build_lexicon(params, src_emb, tgt_emb):
 
     final_pairs = s2t_candidates & t2s_candidates
     if len(final_pairs) == 0:
-        logger.warning("Empty intersection ...")
         return None
     dico = torch.LongTensor(list([[int(a), int(b)] for (a, b) in final_pairs]))
 
     if len(dico) == 0:
         return None
-    logger.info('New train dictionary of %i pairs.' % dico.size(0))
     return dico.to(params.device)
