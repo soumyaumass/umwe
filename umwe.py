@@ -172,7 +172,7 @@ class UMWE(nn.Module):
             y_true[self.batch:] = 0.1
             y_true = y_true.to(self.device)
             
-            preds = self.discriminators[dec_lang](x_to_disc)
+            preds = self.discriminators[dec_lang](x_to_disc.detach())
             # Calculate discriminator loss - assign 0 to fake and 1 to real embeddings
             discrim_loss += criterion(preds, y_true)
             
@@ -256,7 +256,6 @@ class UMWE(nn.Module):
                     start = end
                     discrim_loss_list = []
                 
-    
     def mpsr_dictionary(self):
         for i, lang1 in enumerate(self.langs):
             for j, lang2 in enumerate(self.langs):
@@ -265,11 +264,13 @@ class UMWE(nn.Module):
                     # Get embeddings for lang1
                     src_emb = self.embs[lang1].weight
                     # Apply lang1 encoder to embeddings
-                    src_emb = self.encdec[lang1](src_emb).detach()
+                    with torch.no_grad():
+                        src_emb = self.encdec[lang1](src_emb).detach()
                     # Get embeddings for lang2
                     tgt_emb = self.embs[lang2].weight
                     # Apply lang2 encoder to embeddings
-                    tgt_emb = self.encdec[lang2](tgt_emb).detach()
+                    with torch.no_grad():
+                        tgt_emb = self.encdec[lang2](tgt_emb).detach()
                     # Normalize output embeddings
                     src_emb = src_emb / src_emb.norm(2, 1, keepdim=True).expand_as(src_emb)
                     tgt_emb = tgt_emb / tgt_emb.norm(2, 1, keepdim=True).expand_as(tgt_emb)
@@ -315,9 +316,9 @@ class UMWE(nn.Module):
 
             mpsr_loss += F.mse_loss(lang1_emb, lang2_emb)
         
-        self.mpsr_optimizer[lang2].zero_grad()
-        mpsr_loss.backward(retain_graph=True)
-        self.mpsr_optimizer[lang2].step()
+        self.mpsr_optimizer.zero_grad()
+        mpsr_loss.backward()
+        self.mpsr_optimizer.step()
 
         beta = 0.001
         for mapping in self.encdec.values():
@@ -368,11 +369,11 @@ def main():
 # =============================================================================
     model = UMWE(dtype, device, 32, 2)
     model.build_model()
-    model.discrim_fit()
-    filename = 'curr_model'
-    f = open(filename, 'wb')
-    pickle.dump(model, f)
-    f.close()
+    # model.discrim_fit()
+    # filename = 'curr_model'
+    # f = open(filename, 'wb')
+    # pickle.dump(model, f)
+    # f.close()
 # =============================================================================
     model.mpsr_refine()
 # =============================================================================

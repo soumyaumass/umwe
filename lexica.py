@@ -8,6 +8,7 @@
 
 from logging import getLogger
 import torch
+import pdb
 
 # from .utils import get_nn_avg_dist
 
@@ -104,6 +105,8 @@ def build_lexicon(params, src_emb, tgt_emb):
     Build a training dictionary given current embeddings / mapping.
     """
     logger.info("Building the train dictionary ...")
+
+    # pdb.set_trace()
 
     s2t_candidates = get_candidates(params, src_emb, tgt_emb)
     t2s_candidates = get_candidates(params, tgt_emb, src_emb)

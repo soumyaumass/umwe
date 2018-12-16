@@ -2,3 +2,4 @@ __pycache__/
 *.vec
 *.pth
 curr_model
+*.txt
