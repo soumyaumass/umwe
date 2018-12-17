@@ -53,8 +53,6 @@ class Evaluator():
             wid2 = self.get_id(w2, word2id2)
             if wid1 is None or wid2 is None:
                 not_found += 1
-                true.append(sim)
-                preds.append(0.5)
                 #ignore word not in both
                 continue
             
@@ -67,18 +65,20 @@ class Evaluator():
         return spearmanr(true, preds)[0], len(true), not_found
     
     def get_cross_lingual_score(self, src_lang, src_word2id, src_emb, tgt_lang, tgt_word2id, tgt_emb):
-        path = '/crosslingual/wordsim'
+        path = './crosslingual/wordsim'
         src_tgt = os.path.join(path, f'{src_lang}-{tgt_lang}-SEMEVAL17.txt')
         tgt_src = os.path.join(path, f'{tgt_lang}-{src_lang}-SEMEVAL17.txt')
         rho = 0.
-        
+        found=0
+        not_found =0
         if os.path.exists(src_tgt):
             print(src_tgt)
             rho, found, not_found = self.spearman_correlation(src_word2id, src_emb, src_tgt, tgt_word2id, tgt_emb)
         elif os.path.exists(tgt_src):
             print(tgt_src)
             rho, found, not_found = self.spearman_correlation(tgt_word2id, tgt_emb, tgt_src, src_word2id, src_emb)
-        
+
+        print('Found:', found, ', Not Found:', not_found)
         return rho
 
     def load_dict(self, path, w2id1, w2id2):
