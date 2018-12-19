@@ -262,11 +262,11 @@ class UMWE(nn.Module):
         return mapping_loss.data.item()
     
     def discrim_fit(self):
-        
+        n_iters = 1000000
         for epoch in range(1):    
             discrim_loss_list = []
             start = time.time()
-            for n_iter in range(0, 1000000, self.batch):
+            for n_iter in range(0, n_iters, self.batch):
                 
                 for n in range(5):
                     discrim_loss_list.append(self.discrim_step())
@@ -400,7 +400,11 @@ def main():
     f.close()
 
     '''
-    model = UMWE(dtype, device, 32, 2)
+    
+    n_epochs = 5
+    batch_size = 32
+    
+    model = UMWE(dtype, device, batch_size, n_epochs)
     model.build_model()
     model.discrim_fit()
     filename = 'curr_model_test'
