@@ -1,16 +1,3 @@
-# Copyright (c) 2017-present, Facebook, Inc.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-#
-
-from logging import getLogger
-
-
-logger = getLogger()
-
-
 class Dictionary(object):
 
     def __init__(self, id2word, word2id, lang):
@@ -61,12 +48,3 @@ class Dictionary(object):
         Returns the index of the specified word.
         """
         return self.word2id[word]
-
-    def prune(self, max_vocab):
-        """
-        Limit the vocabulary size.
-        """
-        assert max_vocab >= 1
-        self.id2word = {k: v for k, v in self.id2word.items() if k < max_vocab}
-        self.word2id = {v: k for k, v in self.id2word.items()}
-        self.check_valid()
