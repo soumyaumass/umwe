@@ -16,13 +16,14 @@ from evaluation import Evaluator
 from lexica import build_lexicon
 
 class UMWE(nn.Module):
-    def __init__(self, dtype=torch.float32, device=torch.device('cpu'), batch=128, epoch=2):
+    def __init__(self, dtype=torch.float32, device=torch.device('cpu'), batch=128, epoch=2, n_refinement=2):
         super(UMWE, self).__init__()
+        self.n_iters = 1000000
         self.dtype = dtype
         self.device = device
-        self.src_langs = {0:'es', 1:'fa'}
+        self.src_langs = {0:'it', 1:'es'}
         self.tgt_lang = 'en'
-        self.langs = ['en', 'es', 'fa']
+        self.langs = ['en', 'it', 'es']
         self.dim = 300
         self.batch = batch
         self.embs = None
@@ -33,12 +34,13 @@ class UMWE(nn.Module):
         self.max_export_vocabs = 50000
         self.max_rank = 15000
         self.freq = 75000
-        self.lexica_method = 'nn'
+        self.lexica_method = 'csls_knn_10'
         self.lexica = {}
         self.discrim_optimizer = None
         self.mapping_optimizer = None
         self.mpsr_optimizer = None
         self.epoch = epoch
+        self.n_refinement = n_refinement
         self.mapping_lr = 0.1
         self.discrim_lr = 0.1
         self.mpsr_lr = 0.001
@@ -262,11 +264,10 @@ class UMWE(nn.Module):
         return mapping_loss.data.item()
     
     def discrim_fit(self):
-        n_iters = 1000000
-        for epoch in range(1):    
+        for epoch in range(self.epoch):    
             discrim_loss_list = []
             start = time.time()
-            for n_iter in range(0, n_iters, self.batch):
+            for n_iter in range(0, self.n_iters, self.batch):
                 
                 for n in range(5):
                     discrim_loss_list.append(self.discrim_step())
@@ -360,7 +361,7 @@ class UMWE(nn.Module):
         return mpsr_loss.data.item()
     
     def mpsr_refine(self):
-        for epoch in range(1):
+        for epoch in range(self.n_refinement):
             # Create lexica from embeddings aligned using MAT in the previous step
             self.mpsr_dictionary()
 
@@ -394,37 +395,48 @@ def main():
     dtype = torch.float32
     
     '''    
-    filename = 'curr_model_test'
+    filename = 'curr_model_soumya_mat_it_es'
     f = open(filename, 'rb')
     model = pickle.load(f)
     f.close()
 
     '''
-    
     n_epochs = 5
+    n_refinement = 5
     batch_size = 32
     
-    model = UMWE(dtype, device, batch_size, n_epochs)
+    model = UMWE(dtype, device, batch_size, n_epochs, n_refinement)
     model.build_model()
     model.discrim_fit()
-    filename = 'curr_model_test'
+    filename = 'curr_model_soumya_mat_it_es'
     f = open(filename, 'wb')
     pickle.dump(model, f)
     f.close()
 
     eval_ = Evaluator(model)
     print(eval_.clws('es', 'en'))
-    print(eval_.clws('fa', 'es'))
+    print(eval_.clws('en', 'es'))
+    print(eval_.clws('it', 'en'))
     eval_.word_translation('es', 'en')
     eval_.word_translation('en', 'es')
+    eval_.word_translation('it', 'en')
 
     model.mpsr_refine()
-    for lang in model.src_langs.values():
-        model.export_embeddings(lang, model.embs, "txt", "test")
     print(eval_.clws('es', 'en'))
-    print(eval_.clws('fa', 'es'))
+    print(eval_.clws('en', 'es'))
+    print(eval_.clws('it', 'en'))
     eval_.word_translation('es', 'en')
     eval_.word_translation('en', 'es')
-
+    eval_.word_translation('it', 'en')
+    
+    
+    filename = 'curr_model_soumya_mpsr_it_es'
+    f = open(filename, 'wb')
+    pickle.dump(model, f)
+    f.close()
+    
+    for lang in model.src_langs.values():
+        model.export_embeddings(lang, model.embs, "txt", "20th")
+   
 if __name__ == '__main__':
     main()

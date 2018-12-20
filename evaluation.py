@@ -15,7 +15,7 @@ class Evaluator():
         self.discriminators = model.discriminators
     
     def encode_decode(self, encdec, embs):
-        batch = 1024
+        batch = 4096
         with torch.no_grad():
             op = embs.clone()
             for i, k in enumerate(range(0, len(embs), batch)):
